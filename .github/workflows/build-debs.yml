@@ -73,7 +73,7 @@ jobs:
                 libzip-dev zlib1g-dev \
                 libusb-1.0-0-dev libftdi1-dev \
                 libieee1284-3-dev libhidapi-dev \
-                libnettle-dev libavahi-client-dev \
+                nettle-dev libavahi-client-dev \
                 python3-dev python3-setuptools \
                 libboost-dev libboost-test-dev libboost-filesystem-dev \
                 libboost-serialization-dev libboost-system-dev libboost-thread-dev \
