@@ -78,16 +78,18 @@ jobs:
                 libboost-dev libboost-test-dev libboost-filesystem-dev \
                 libboost-serialization-dev libboost-system-dev libboost-thread-dev \
                 qtbase5-dev libqt5svg5-dev qttools5-dev \
-                libfftw3-dev sdcc doxygen swig \
-                checkinstall
+                libfftw3-dev sdcc doxygen swig
 
               PREFIX=/usr
-              export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/pkgconfig:${PKG_CONFIG_PATH}"
-              export LD_LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH):${LD_LIBRARY_PATH}"
+              ARCH=$(dpkg --print-architecture)
+              PKG_ROOT=/tmp/pkg-root
               NPROC=$(nproc)
 
+              export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/pkgconfig:${PKG_CONFIG_PATH}"
+              export LD_LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH):${LD_LIBRARY_PATH}"
+
               ##############################################
-              # 2. Build libserialport
+              # 2. Build & install libserialport (to system for subsequent builds)
               ##############################################
               cd /tmp
               git clone git://sigrok.org/libserialport
@@ -99,7 +101,7 @@ jobs:
               ldconfig
 
               ##############################################
-              # 3. Build libsigrok
+              # 3. Build & install libsigrok
               ##############################################
               cd /tmp
               git clone git://sigrok.org/libsigrok
@@ -110,20 +112,8 @@ jobs:
               make install
               ldconfig
 
-              # Install udev rules
-              mkdir -p /usr/lib/udev/rules.d
-              if [ -f contrib/60-libsigrok.rules ]; then
-                cp contrib/60-libsigrok.rules /usr/lib/udev/rules.d/
-              fi
-              if [ -f contrib/61-libsigrok-plugdev.rules ]; then
-                cp contrib/61-libsigrok-plugdev.rules /usr/lib/udev/rules.d/
-              fi
-              if [ -f contrib/61-libsigrok-uaccess.rules ]; then
-                cp contrib/61-libsigrok-uaccess.rules /usr/lib/udev/rules.d/
-              fi
-
               ##############################################
-              # 4. Build libsigrokdecode
+              # 4. Build & install libsigrokdecode
               ##############################################
               cd /tmp
               git clone git://sigrok.org/libsigrokdecode
@@ -132,7 +122,6 @@ jobs:
               ./configure --prefix=${PREFIX}
               make -j${NPROC}
               # Skip tests on arm64/riscv64 (known flaky)
-              ARCH=$(dpkg --print-architecture)
               if [ "$ARCH" = "amd64" ]; then
                 make check || true
               fi
@@ -140,7 +129,7 @@ jobs:
               ldconfig
 
               ##############################################
-              # 5. Build sigrok-cli
+              # 5. Build & install sigrok-cli
               ##############################################
               cd /tmp
               git clone git://sigrok.org/sigrok-cli
@@ -151,7 +140,7 @@ jobs:
               make install
 
               ##############################################
-              # 6. Build sigrok-firmware-fx2lafw
+              # 6. Build & install sigrok-firmware-fx2lafw
               ##############################################
               cd /tmp
               git clone git://sigrok.org/sigrok-firmware-fx2lafw
@@ -167,7 +156,7 @@ jobs:
               cd /tmp
               git clone git://sigrok.org/pulseview
               cd pulseview
-              mkdir build && cd build
+              mkdir -p builddir && cd builddir
               cmake ../ \
                 -DCMAKE_INSTALL_PREFIX=${PREFIX} \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -176,63 +165,74 @@ jobs:
                 -DENABLE_TESTS=OFF
               make -j${NPROC}
 
-              # Pre-create dirs checkinstall might miss
-              mkdir -p ${PREFIX}/share/doc/${PKG_NAME}
-              mkdir -p ${PREFIX}/share/applications
-              mkdir -p ${PREFIX}/share/icons
-              mkdir -p ${PREFIX}/share/metainfo
-              mkdir -p ${PREFIX}/share/man/man1
-
               ##############################################
-              # 8. Package everything with checkinstall
-              #    We snapshot the full sigrok install
+              # 8. Re-install everything into DESTDIR staging root
               ##############################################
-
-              # Create a master install script that captures everything
-              cat > /tmp/install-all.sh << "INSTALL_EOF"
-              #!/bin/bash
-              set -ex
-              cd /tmp/libserialport && make install
-              cd /tmp/libsigrok && make install
-              cd /tmp/libsigrokdecode && make install
-              cd /tmp/sigrok-cli && make install
-              cd /tmp/sigrok-firmware-fx2lafw && make install
-              cd /tmp/pulseview/build && make install
+              cd /tmp/libserialport    && make install DESTDIR=${PKG_ROOT}
+              cd /tmp/libsigrok        && make install DESTDIR=${PKG_ROOT}
+              cd /tmp/libsigrokdecode   && make install DESTDIR=${PKG_ROOT}
+              cd /tmp/sigrok-cli        && make install DESTDIR=${PKG_ROOT}
+              cd /tmp/sigrok-firmware-fx2lafw && make install DESTDIR=${PKG_ROOT}
+              cd /tmp/pulseview/builddir && make install DESTDIR=${PKG_ROOT}
 
               # udev rules
-              mkdir -p /usr/lib/udev/rules.d
+              mkdir -p ${PKG_ROOT}/usr/lib/udev/rules.d
               for f in /tmp/libsigrok/contrib/6*-libsigrok*.rules; do
-                [ -f "$f" ] && cp "$f" /usr/lib/udev/rules.d/
+                [ -f "$f" ] && cp "$f" ${PKG_ROOT}/usr/lib/udev/rules.d/
               done
-          INSTALL_EOF
-              chmod +x /tmp/install-all.sh
 
-              checkinstall \
-                --type=debian \
-                --pkgname="${PKG_NAME}" \
-                --pkgversion="${PKG_VERSION}" \
-                --pkgrelease="${PKG_RELEASE}" \
-                --arch=$(dpkg --print-architecture) \
-                --pkglicense="GPL-3.0" \
-                --pkggroup="electronics" \
-                --maintainer="seb@penthertz.com" \
-                --provides="pulseview,sigrok-cli,libsigrok,libsigrokdecode,libserialport,sigrok-firmware-fx2lafw" \
-                --requires="libglib2.0-0t64,libusb-1.0-0,libftdi1-2,libzip4t64,zlib1g,libqt5core5t64,libqt5gui5t64,libqt5widgets5t64,libqt5svg5,libboost-filesystem1.83.0,libboost-serialization1.83.0,libboost-system1.83.0,libboost-thread1.83.0,libfftw3-single3,libhidapi-hidraw0,python3,libnettle8t64,libglibmm-2.4-1t64,libieee1284-3" \
-                --nodoc \
-                --backup=no \
-                --deldoc=yes \
-                --deldesc=yes \
-                --delspec=yes \
-                --default \
-                --install=no \
-                /tmp/install-all.sh
+              ##############################################
+              # 9. Build .deb with dpkg-deb
+              ##############################################
+              mkdir -p ${PKG_ROOT}/DEBIAN
+              INSTALLED_SIZE=$(du -sk ${PKG_ROOT} | cut -f1)
 
-              cp *.deb /output/
-              echo "Built package:"
-              ls -lh /output/*.deb
-              dpkg-deb --info /output/*.deb
-              echo "Package contents (first 50 lines):"
-              dpkg-deb --contents /output/*.deb | head -50
+              cat > ${PKG_ROOT}/DEBIAN/control << EOF
+          Package: ${PKG_NAME}
+          Version: ${PKG_VERSION}-${PKG_RELEASE}
+          Architecture: ${ARCH}
+          Maintainer: seb@penthertz.com
+          Installed-Size: ${INSTALLED_SIZE}
+          Depends: libglib2.0-0t64, libusb-1.0-0, libftdi1-2, libzip4t64, zlib1g, libqt5core5t64, libqt5gui5t64, libqt5widgets5t64, libqt5svg5, libboost-filesystem1.83.0, libboost-serialization1.83.0, libboost-system1.83.0, libboost-thread1.83.0, libfftw3-single3, libhidapi-hidraw0, python3, libnettle8t64, libglibmm-2.4-1t64, libieee1284-3
+          Provides: pulseview, sigrok-cli, libsigrok, libsigrokdecode, libserialport, sigrok-firmware-fx2lafw
+          Conflicts: pulseview, sigrok-cli, libsigrok-dev, libsigrokdecode-dev
+          Section: electronics
+          Priority: optional
+          Homepage: https://sigrok.org
+          Description: PulseView + complete sigrok stack
+           Complete sigrok suite including PulseView (Qt-based logic analyzer
+           GUI), sigrok-cli, libsigrok, libsigrokdecode, libserialport,
+           and fx2lafw firmware for FX2-based logic analyzers.
+          EOF
+
+              # Post-install: ldconfig + udev reload
+              cat > ${PKG_ROOT}/DEBIAN/postinst << "POSTINST"
+          #!/bin/bash
+          set -e
+          ldconfig
+          if command -v udevadm > /dev/null 2>&1; then
+            udevadm control --reload-rules 2>/dev/null || true
+            udevadm trigger 2>/dev/null || true
+          fi
+          POSTINST
+              chmod 755 ${PKG_ROOT}/DEBIAN/postinst
+
+              # Post-remove: ldconfig
+              cat > ${PKG_ROOT}/DEBIAN/postrm << "POSTRM"
+          #!/bin/bash
+          set -e
+          ldconfig
+          POSTRM
+              chmod 755 ${PKG_ROOT}/DEBIAN/postrm
+
+              DEB_FILE="/output/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.deb"
+              dpkg-deb --build ${PKG_ROOT} ${DEB_FILE}
+
+              echo "=== Built package ==="
+              ls -lh ${DEB_FILE}
+              dpkg-deb --info ${DEB_FILE}
+              echo "=== Package contents (first 80 lines) ==="
+              dpkg-deb --contents ${DEB_FILE} | head -80
             '
 
       - name: Upload artifact
